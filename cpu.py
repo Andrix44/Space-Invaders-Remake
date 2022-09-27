@@ -75,11 +75,12 @@ class CPU: # !!! BCD-related things are not supported !!!
         self.regs.flags.unus5 = False
 
         self.mem = mem.mem
+        self.interrupts = False
 
     def SetFlagsZSP(self, val: int) -> None:
         self.regs.flags.zero = val == 0
         self.regs.flags.sign = val >> 7
-        self.regs.flags.parity = bin(val).count('1') & 1
+        self.regs.flags.parity = not bin(val).count('1') & 1
 
     def IsConditionTrue(self, cond: int) -> bool:
         match cond:
@@ -108,6 +109,10 @@ class CPU: # !!! BCD-related things are not supported !!!
         jump_taken = False
         cycles = CYCLE_LUT[instr]
         print(hex(self.regs.pc) + ': ' + hex(instr) + ' ' + hex(imm0) + ' ' + hex(imm1))
+        #with open("log.txt", 'a') as f:
+        #    f.write(f"[{self.regs.sp}] {hex(self.regs.pc)}: {hex(instr)}: {hex(self.regs.A)} {hex(self.regs.B)} {hex(self.regs.C)} {hex(self.regs.D)} {hex(self.regs.E)} {hex(self.regs.H)} {hex(self.regs.L)} {bool(self.regs.flags.sign)} {bool(self.regs.flags.zero)} {bool(self.regs.flags.parity)} {bool(self.regs.flags.carry)}\n")
+        
+
         match instr:
             case 0x00 | 0x08 | 0x10 | 0x18 | 0x20 | 0x28 | 0x30 | 0x38: # NOP
                 pass
@@ -258,14 +263,16 @@ class CPU: # !!! BCD-related things are not supported !!!
                     self.regs.flags.carry = (self.regs.A + reg_val) > 0xff
                     self.regs.A += reg_val
                 elif (instr >= 0x88 and instr <= 0x8f): # ADC
+                    carry_saved = self.regs.flags.carry
                     self.regs.flags.carry = (self.regs.A + reg_val + self.regs.flags.carry) > 0xff
-                    self.regs.A += reg_val + self.regs.flags.carry
+                    self.regs.A += reg_val + carry_saved
                 elif (instr >= 0x90 and instr <= 0x97): # SUB
                     self.regs.flags.carry = (self.regs.A - reg_val) < 0
                     self.regs.A -= reg_val
                 elif (instr >= 0x98 and instr <= 0x9f): # SBB
+                    carry_saved = self.regs.flags.carry
                     self.regs.flags.carry = (self.regs.A - reg_val - self.regs.flags.carry) < 0
-                    self.regs.A -= reg_val + self.regs.carry
+                    self.regs.A -= reg_val + carry_saved
                 elif (instr >= 0xa0 and instr <= 0xa7): # ANA
                     self.regs.flags.carry = False
                     self.regs.A &= reg_val
@@ -312,10 +319,11 @@ class CPU: # !!! BCD-related things are not supported !!!
                 cond = (instr >> 3) & 0x7
                 if(self.IsConditionTrue(cond)):
                     self.regs.pc = (imm1 << 8) | imm0
+                    jump_taken = True
                 else:
                     self.regs.pc += 2
 
-            case 0xc3: # JMP
+            case 0xc3 | 0xcb: # JMP
                 self.regs.pc = (imm1 << 8) | imm0
                 jump_taken = True
 
@@ -346,14 +354,16 @@ class CPU: # !!! BCD-related things are not supported !!!
                     self.regs.flags.carry = (self.regs.A + imm0) > 0xff
                     self.regs.A += imm0
                 elif(instr == 0xce): # ACI
+                    carry_saved = self.regs.flags.carry
                     self.regs.flags.carry = (self.regs.A + imm0 + self.regs.flags.carry) > 0xff
-                    self.regs.A += imm0 + self.regs.flags.carry
-                if(instr == 0xd6): # SUI
+                    self.regs.A += imm0 + carry_saved
+                elif(instr == 0xd6): # SUI
                     self.regs.flags.carry = (self.regs.A - imm0) < 0
                     self.regs.A -= imm0
                 elif(instr == 0xde): # SBI
+                    carry_saved = self.regs.flags.carry
                     self.regs.flags.carry = (self.regs.A - imm0 - self.regs.flags.carry) < 0
-                    self.regs.A -= imm0 + self.regs.flags.carry
+                    self.regs.A -= imm0 + carry_saved
                 elif(instr == 0xe6): # ANI
                     self.regs.flags.carry = False
                     self.regs.A &= imm0
@@ -369,18 +379,51 @@ class CPU: # !!! BCD-related things are not supported !!!
 
             case 0xfe: # CPI
                 self.regs.flags.carry = (self.regs.A - imm0) < 0
-                res = self.regs.A - imm0
+                res: c_uint8 = self.regs.A - imm0
                 self.SetFlagsZSP(res)
                 self.regs.pc += 1
 
-            # next: 0xc7
+            case 0xc7 | 0xcf | 0xd7 | 0xdf | 0xe7 | 0xef | 0xf7 | 0xff: # RST
+                self.mem[self.regs.sp - 1] = self.regs.pc >> 8
+                self.mem[self.regs.sp - 2] = self.regs.pc & 0xff
+                self.regs.sp -= 2
+                self.regs.pc = 8 * ((instr >> 3) & 7)
 
-            case 0xcd: # CALL
+            case 0xc9 | 0xd9: # RET
+                self.regs.pc = (self.mem[self.regs.sp + 1] << 8) | self.mem[self.regs.sp]
+                self.regs.sp += 2
+
+            case 0xcd | 0xdd | 0xed | 0xfd: # CALL
                 self.mem[self.regs.sp - 1] = self.regs.pc >> 8
                 self.mem[self.regs.sp - 2] = self.regs.pc & 0xff
                 self.regs.sp -= 2
                 self.regs.pc = (imm1 << 8) | imm0
                 jump_taken = True
+
+            case 0xd3: # OUT
+                pass
+
+            case 0xdb: # IN
+                pass
+
+            case 0xe3: # XTHL
+                self.regs.L, self.mem[self.regs.sp] = self.mem[self.regs.sp], self.regs.L
+                self.regs.H, self.mem[self.regs.sp + 1] = self.mem[self.regs.sp + 1], self.regs.H
+
+            case 0xe9: # PCHL
+                self.regs.pc = self.regs.HL
+
+            case 0xeb: # XCHG
+                self.regs.HL, self.regs.DE = self.regs.DE, self.regs.HL
+
+            case 0xf3: # DI
+                self.interrupts = False
+
+            case 0xfb: # EI
+                self.interrupts = True
+
+            case 0xf9: # SPHL
+                self.regs.sp = self.regs.HL
 
             case _:
                 print("Unsupported instruction: " + hex(instr))
