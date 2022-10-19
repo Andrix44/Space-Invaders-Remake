@@ -1,6 +1,7 @@
 from ctypes import *
 from sys import exit
 
+from audio import Audio
 from memory import Memory
 
 
@@ -23,7 +24,6 @@ CYCLE_LUT = (4, 10, 7,  5,  5,  5,  7,  4,  4, 10, 7,  5,  5,  5,  7, 4,   # 0x0
 
 REG_PAIRS = ("BC", "DE", "HL", "sp")
 REGS = ("B", "C", "D", "E", "H", "L", "mem", "A")
-OPERATORS = {}
 
 class Registers(Structure):
 
@@ -63,19 +63,63 @@ class Registers(Structure):
         _anonymous_ = ("HL8_8",)
         _fields_ = [("HL", c_uint16), ("HL8_8", HL_8_8)]
 
-    _anonymous_ = ("status", "BC16", "DE16", "HL16",)
-    _fields_ = [("A", c_uint8), ("status", StatusReg), ("BC16", BC_16), ("DE16", DE_16), ("HL16", HL_16), ("sp", c_uint16), ("pc", c_uint16)]
+
+    class Shift(Union):
+        class Shift_8_8(BigEndianStructure):
+            _fields_ = [("shift_hi", c_uint8, 8), ("shift_lo", c_uint8, 8)]
+
+        _anonymous_ = ("Shift8_8",)
+        _fields_ = [("shift_full", c_uint16), ("Shift8_8", Shift_8_8)]
+
+
+    _anonymous_ = ("status", "BC16", "DE16", "HL16", "shift",)
+    _fields_ = [("A", c_uint8), ("status", StatusReg), ("BC16", BC_16), ("DE16", DE_16), ("HL16", HL_16), ("sp", c_uint16),
+                ("pc", c_uint16), ("shift", Shift), ("shift_off", c_uint8), ("input1", c_uint8), ("input2", c_uint8)]
 
 
 class CPU:
-    def __init__(self, mem: Memory) -> None:
+    def __init__(self, mem: Memory, audio: Audio) -> None:
         self.regs = Registers()
         self.regs.flags.unus1 = True
         self.regs.flags.unus3 = False
         self.regs.flags.unus5 = False
 
         self.mem = mem.mem
-        self.interrupts = False
+        self.audio = audio
+        self.interrupts_enabled = False
+
+        self.jump_table = (self.Instr_NOP, self.Instr_LXI, self.Instr_STAX, self.Instr_INX, self.Instr_INR, self.Instr_DCR, self.Instr_MVI, self.Instr_RLC,
+                           self.Instr_NOP, self.Instr_DAD, self.Instr_LDAX, self.Instr_DCX, self.Instr_INR, self.Instr_DCR, self.Instr_MVI, self.Instr_RRC,
+                           self.Instr_NOP, self.Instr_LXI, self.Instr_STAX, self.Instr_INX, self.Instr_INR, self.Instr_DCR, self.Instr_MVI, self.Instr_RAL,
+                           self.Instr_NOP, self.Instr_DAD, self.Instr_LDAX, self.Instr_DCX, self.Instr_INR, self.Instr_DCR, self.Instr_MVI, self.Instr_RAR,
+                           self.Instr_NOP, self.Instr_LXI, self.Instr_SHLD, self.Instr_INX, self.Instr_INR, self.Instr_DCR, self.Instr_MVI, self.Instr_DAA,
+                           self.Instr_NOP, self.Instr_DAD, self.Instr_LHLD, self.Instr_DCX, self.Instr_INR, self.Instr_DCR, self.Instr_MVI, self.Instr_CMA,
+                           self.Instr_NOP, self.Instr_LXI, self.Instr_STA , self.Instr_INX, self.Instr_INR, self.Instr_DCR, self.Instr_MVI, self.Instr_STC,
+                           self.Instr_NOP, self.Instr_DAD, self.Instr_LDA , self.Instr_DCX, self.Instr_INR, self.Instr_DCR, self.Instr_MVI, self.Instr_CMC,
+                           self.Instr_MOV, self.Instr_MOV, self.Instr_MOV , self.Instr_MOV, self.Instr_MOV, self.Instr_MOV, self.Instr_MOV, self.Instr_MOV,
+                           self.Instr_MOV, self.Instr_MOV, self.Instr_MOV , self.Instr_MOV, self.Instr_MOV, self.Instr_MOV, self.Instr_MOV, self.Instr_MOV,
+                           self.Instr_MOV, self.Instr_MOV, self.Instr_MOV , self.Instr_MOV, self.Instr_MOV, self.Instr_MOV, self.Instr_MOV, self.Instr_MOV,
+                           self.Instr_MOV, self.Instr_MOV, self.Instr_MOV , self.Instr_MOV, self.Instr_MOV, self.Instr_MOV, self.Instr_MOV, self.Instr_MOV,
+                           self.Instr_MOV, self.Instr_MOV, self.Instr_MOV , self.Instr_MOV, self.Instr_MOV, self.Instr_MOV, self.Instr_MOV, self.Instr_MOV,
+                           self.Instr_MOV, self.Instr_MOV, self.Instr_MOV , self.Instr_MOV, self.Instr_MOV, self.Instr_MOV, self.Instr_MOV, self.Instr_MOV,
+                           self.Instr_MOV, self.Instr_MOV, self.Instr_MOV , self.Instr_MOV, self.Instr_MOV, self.Instr_MOV, self.Instr_HLT, self.Instr_MOV,
+                           self.Instr_MOV, self.Instr_MOV, self.Instr_MOV , self.Instr_MOV, self.Instr_MOV, self.Instr_MOV, self.Instr_MOV, self.Instr_MOV,
+                           self.InstrGrp1, self.InstrGrp1, self.InstrGrp1 , self.InstrGrp1, self.InstrGrp1, self.InstrGrp1, self.InstrGrp1, self.InstrGrp1,
+                           self.InstrGrp1, self.InstrGrp1, self.InstrGrp1 , self.InstrGrp1, self.InstrGrp1, self.InstrGrp1, self.InstrGrp1, self.InstrGrp1,
+                           self.InstrGrp1, self.InstrGrp1, self.InstrGrp1 , self.InstrGrp1, self.InstrGrp1, self.InstrGrp1, self.InstrGrp1, self.InstrGrp1,
+                           self.InstrGrp1, self.InstrGrp1, self.InstrGrp1 , self.InstrGrp1, self.InstrGrp1, self.InstrGrp1, self.InstrGrp1, self.InstrGrp1,
+                           self.InstrGrp1, self.InstrGrp1, self.InstrGrp1 , self.InstrGrp1, self.InstrGrp1, self.InstrGrp1, self.InstrGrp1, self.InstrGrp1,
+                           self.InstrGrp1, self.InstrGrp1, self.InstrGrp1 , self.InstrGrp1, self.InstrGrp1, self.InstrGrp1, self.InstrGrp1, self.InstrGrp1,
+                           self.InstrGrp1, self.InstrGrp1, self.InstrGrp1 , self.InstrGrp1, self.InstrGrp1, self.InstrGrp1, self.InstrGrp1, self.InstrGrp1,
+                           self.Instr_CMP, self.Instr_CMP, self.Instr_CMP , self.Instr_CMP, self.Instr_CMP, self.Instr_CMP, self.Instr_CMP, self.Instr_CMP,
+                           self.Instr_RCC, self.Instr_POP, self.Instr_JCC , self.Instr_JMP, self.Instr_CCC, self.Instr_PUSH,self.InstrGrp2, self.Instr_RST,
+                           self.Instr_RCC, self.Instr_RET, self.Instr_JCC , self.Instr_JMP, self.Instr_CCC, self.Instr_CALL,self.InstrGrp2, self.Instr_RST,
+                           self.Instr_RCC, self.Instr_POP, self.Instr_JCC , self.Instr_OUT, self.Instr_CCC, self.Instr_PUSH,self.InstrGrp2, self.Instr_RST,
+                           self.Instr_RCC, self.Instr_RET, self.Instr_JCC , self.Instr_IN,  self.Instr_CCC, self.Instr_CALL,self.InstrGrp2, self.Instr_RST,
+                           self.Instr_RCC, self.Instr_POP, self.Instr_JCC , self.Instr_XTHL,self.Instr_CCC, self.Instr_PUSH,self.InstrGrp2, self.Instr_RST,
+                           self.Instr_RCC, self.Instr_PCHL,self.Instr_JCC , self.Instr_XCHG,self.Instr_CCC, self.Instr_CALL,self.InstrGrp2, self.Instr_RST,
+                           self.Instr_RCC, self.Instr_POP, self.Instr_JCC , self.Instr_DI,  self.Instr_CCC, self.Instr_PUSH,self.InstrGrp2, self.Instr_RST,
+                           self.Instr_RCC, self.Instr_SPHL,self.Instr_JCC , self.Instr_EI,  self.Instr_CCC, self.Instr_CALL,self.Instr_CPI, self.Instr_RST)
 
     def SetFlagsZSP(self, val: int) -> None:
         self.regs.flags.zero = val == 0
@@ -105,12 +149,12 @@ class CPU:
         self.mem[self.regs.sp - 1] = val >> 8
         self.mem[self.regs.sp - 2] = val & 0xff
         self.regs.sp -= 2
-        print("Pushed: " + hex(val))
+        #print("Pushed: " + hex(val))
 
     def Pop16(self) -> int:
         val = (self.mem[self.regs.sp + 1] << 8) | self.mem[self.regs.sp]
         self.regs.sp += 2
-        print("Popped: " + hex(val))
+        #print("Popped: " + hex(val))
         return val
 
     def Step(self) -> int:
@@ -118,357 +162,380 @@ class CPU:
         imm0 = self.mem[self.regs.pc + 1]
         imm1 = self.mem[self.regs.pc + 2]
 
-        keep_pc = False
-        cycles = CYCLE_LUT[instr]
-        print(hex(self.regs.pc) + ': ' + hex(instr) + ' ' + hex(imm0) + ' ' + hex(imm1))
+        keep_pc = [False]
+        cycles = [CYCLE_LUT[instr]]
+        #print(hex(self.regs.pc) + ': ' + hex(instr) + ' ' + hex(imm0) + ' ' + hex(imm1))
         #with open("log.txt", 'a') as f:
         #    f.write(f"[{self.regs.sp}] {hex(self.regs.pc)}: {hex(instr)}: {hex(self.regs.A)} {hex(self.regs.B)} {hex(self.regs.C)} {hex(self.regs.D)} {hex(self.regs.E)} {hex(self.regs.H)} {hex(self.regs.L)} {bool(self.regs.flags.sign)} {bool(self.regs.flags.zero)} {bool(self.regs.flags.parity)} {bool(self.regs.flags.carry)} {bool(self.regs.flags.aux)}\n")
-        
 
-        match instr:
-            case 0x00 | 0x08 | 0x10 | 0x18 | 0x20 | 0x28 | 0x30 | 0x38: # NOP
-                pass
+        self.jump_table[instr](instr, imm0, imm1, keep_pc, cycles)
 
-            case 0x01 | 0x11 | 0x21 | 0x31: # LXI
-                setattr(self.regs, REG_PAIRS[(instr >> 4) & 0x3], (imm1 << 8) | imm0)
-                self.regs.pc += 2
-
-            case 0x02 | 0x12: # STAX
-                addr = getattr(self.regs, REG_PAIRS[(instr >> 4) & 0x3])
-                self.mem[addr] = self.regs.A
-
-            case 0x03 | 0x13 | 0x23 | 0x33: # INX
-                reg_pair = REG_PAIRS[(instr >> 4) & 0x3]
-                reg_pair_val = getattr(self.regs, reg_pair)
-                setattr(self.regs, reg_pair, reg_pair_val + 1)
-
-            case 0x04 | 0x0c | 0x14 | 0x1c | 0x24 | 0x2c| 0x34 | 0x3c: # INR
-                reg = REGS[(instr >> 3) & 0x7]
-                if(reg == "mem"):
-                    self.regs.flags.aux = ((self.mem[self.regs.HL] & 0xf) + 1) > 0xf
-                    self.mem[self.regs.HL] += 1
-                    self.SetFlagsZSP(self.mem[self.regs.HL])
-                else:
-                    val = getattr(self.regs, reg)
-                    self.regs.flags.aux = ((val & 0xf) + 1) > 0xf
-                    setattr(self.regs, reg, val + 1)
-                    self.SetFlagsZSP(val + 1)
-
-            case 0x05 | 0x0d | 0x15 | 0x1d | 0x25 | 0x2d| 0x35 | 0x3d: # DCR
-                reg = REGS[(instr >> 3) & 0x7]
-                if(reg == "mem"):
-                    self.regs.flags.aux = ((self.mem[self.regs.HL] & 0xf) - 1) < 0
-                    self.mem[self.regs.HL] -= 1
-                    self.SetFlagsZSP(self.mem[self.regs.HL])
-                else:
-                    val = getattr(self.regs, reg)
-                    self.regs.flags.aux = ((val & 0xf) - 1) < 0
-                    setattr(self.regs, reg, val - 1)
-                    self.SetFlagsZSP(val - 1)
-
-            case 0x06 | 0x0e | 0x16 | 0x1e | 0x26 | 0x2e| 0x36 | 0x3e: # MVI
-                reg = REGS[(instr >> 3) & 0x7]
-                if(reg == "mem"):
-                    self.mem[self.regs.HL] = imm0
-                else:
-                    setattr(self.regs, reg, imm0)
-                self.regs.pc += 1
-
-            case 0x07: # RLC
-                self.regs.flags.carry = self.regs.A >> 7
-                self.regs.A = self.regs.A << 1 | self.regs.flags.carry
-
-            case 0x09 | 0x19 | 0x29 | 0x39: # DAD
-                reg_pair = REG_PAIRS[(instr >> 4) & 0x3]
-                reg_pair_val = getattr(self.regs, reg_pair)
-                self.regs.flags.carry = (self.regs.HL + reg_pair_val) > 0xffff
-                self.regs.HL = self.regs.HL + reg_pair_val
-
-            case 0x0a | 0x1a: # LDAX
-                addr = getattr(self.regs, REG_PAIRS[(instr >> 4) & 0x3])
-                self.regs.A = self.mem[addr]
-
-            case 0x0b | 0x1b | 0x2b | 0x3b: # DCX
-                reg_pair = REG_PAIRS[(instr >> 4) & 0x3]
-                reg_pair_val = getattr(self.regs, reg_pair)
-                setattr(self.regs, reg_pair, reg_pair_val - 1)
-
-            case 0x0f: # RRC
-                self.regs.flags.carry = self.regs.A & 1
-                self.regs.A = (self.regs.flags.carry << 7) | (self.regs.A >> 1)
-
-            case 0x17: # RAL
-                carry_saved = self.regs.flags.carry
-                self.regs.flags.carry = self.regs.A >> 7
-                self.regs.A = self.regs.A << 1 | carry_saved
-
-            case 0x1f: # RAR
-                carry_saved = self.regs.flags.carry
-                self.regs.flags.carry = self.regs.A & 1
-                self.regs.A = (carry_saved << 7) | (self.regs.A >> 1)
-
-            case 0x22: # SHLD
-                mem_loc = (imm1 << 8) | imm0
-                self.mem[mem_loc] = self.regs.L
-                self.mem[mem_loc + 1] = self.regs.H
-                self.regs.pc += 2
-
-            case 0x27: # DAA
-                if((self.regs.A & 0xf) > 9 or self.regs.flags.aux):
-                    self.regs.flags.aux = (self.regs.A & 0xf) > 9
-                    self.regs.A += 6
-                
-                if((self.regs.A >> 4) > 9 or self.regs.flags.carry):
-                    self.regs.flags.carry = (self.regs.A + (6 << 4)) > 0xff
-                    self.regs.A += 6 << 4
-
-
-                self.SetFlagsZSP(self.regs.A)
-
-            case 0x2a: # LHLD
-                mem_loc = (imm1 << 8) | imm0
-                self.regs.L = self.mem[mem_loc]
-                self.regs.H = self.mem[mem_loc + 1]
-                self.regs.pc += 2
-
-            case 0x2f: # CMA
-                self.regs.A = ~self.regs.A
-
-            case 0x32: # STA
-                mem_loc = (imm1 << 8) | imm0
-                self.mem[mem_loc] = self.regs.A
-                self.regs.pc += 2
-
-            case 0x37: # STC
-                self.regs.flags.carry = True
-
-            case 0x3a: # LDA
-                mem_loc = (imm1 << 8) | imm0
-                self.regs.A = self.mem[mem_loc]
-                self.regs.pc += 2
-
-            case 0x3f: # CMC
-                self.regs.flags.carry = not self.regs.flags.carry
-
-
-            case _ if (instr >= 0x40 and instr <= 0x7f and instr != 0x76): # MOV
-                reg1 = REGS[(instr >> 3) & 0x7]
-                reg2 = REGS[instr & 0x7]
-                if(reg1 == "mem"):
-                    self.mem[self.regs.HL] = getattr(self.regs, reg2)
-                elif(reg2 == "mem"):
-                    setattr(self.regs, reg1, self.mem[self.regs.HL])
-                else:
-                    setattr(self.regs, reg1, getattr(self.regs, reg2))
-
-            case 0x76: # HLT
-                exit(0, "Halt instruction")
-
-            case _ if (instr >= 0x80 and instr <= 0xb7):
-                reg = REGS[instr & 0x7]
-                if(reg == "mem"):
-                    reg_val = self.mem[self.regs.HL]
-                else:
-                    reg_val = getattr(self.regs, reg)
-                
-                if (instr >= 0x80 and instr <= 0x87): # ADD
-                    self.regs.flags.carry = (self.regs.A + reg_val) > 0xff
-                    self.regs.flags.aux = ((self.regs.A & 0xf) + (reg_val & 0xf)) > 0xf
-                    self.regs.A += reg_val
-                elif (instr >= 0x88 and instr <= 0x8f): # ADC
-                    carry_saved = self.regs.flags.carry
-                    self.regs.flags.carry = (self.regs.A + reg_val + self.regs.flags.carry) > 0xff
-                    self.regs.flags.aux = ((self.regs.A & 0xf) + (reg_val & 0xf) + self.regs.flags.carry) > 0xf
-                    self.regs.A += reg_val + carry_saved
-                elif (instr >= 0x90 and instr <= 0x97): # SUB
-                    self.regs.flags.carry = (self.regs.A - reg_val) < 0
-                    self.regs.flags.aux = ((self.regs.A & 0xf) - (reg_val & 0xf)) < 0
-                    self.regs.A -= reg_val
-                elif (instr >= 0x98 and instr <= 0x9f): # SBB
-                    carry_saved = self.regs.flags.carry
-                    self.regs.flags.carry = (self.regs.A - reg_val - self.regs.flags.carry) < 0
-                    self.regs.flags.aux = ((self.regs.A & 0xf) - (reg_val & 0xf) - self.regs.flags.carry) < 0
-                    self.regs.A -= reg_val + carry_saved
-                elif (instr >= 0xa0 and instr <= 0xa7): # ANA
-                    self.regs.flags.carry = False
-                    self.regs.flags.aux = False
-                    self.regs.A &= reg_val
-                elif (instr >= 0xa8 and instr <= 0xaf): # XRA
-                    self.regs.flags.carry = False
-                    self.regs.flags.aux = False
-                    self.regs.A ^= reg_val
-                elif (instr >= 0xb0 and instr <= 0xb7): # ORA
-                    self.regs.flags.carry = False
-                    self.regs.flags.aux = False
-                    self.regs.A |= reg_val
-                    
-                self.SetFlagsZSP(self.regs.A)
-            
-            case _ if (instr >= 0xb8 and instr <= 0xbf): # CMP
-                reg = REGS[instr & 0x7]
-                if(reg == "mem"):
-                    reg_val = self.mem[self.regs.HL]
-                else:
-                    reg_val = getattr(self.regs, reg)
-                res = (self.regs.A - reg_val) < 0
-                self.regs.flags.aux = ((self.regs.A & 0xf) - (reg_val & 0xf)) < 0
-                self.SetFlagsZSP(res)
-
-            case 0xc0 | 0xc8 | 0xd0 | 0xd8 | 0xe0 | 0xe8 | 0xf0 | 0xf8: # RCC
-                cond = (instr >> 3) & 0x7
-                if(self.IsConditionTrue(cond)):
-                    self.regs.pc = self.Pop16()
-                    cycles += 6
-                    keep_pc = True
-
-            case 0xc1 | 0xd1 | 0xe1 | 0xf1: # POP
-                val = self.Pop16()
-                reg_pair = REG_PAIRS[(instr >> 4) & 0x3]
-                if(reg_pair == "sp"):
-                    self.regs.sr = val & 0xff
-                    assert(self.regs.flags.unus1 == True)
-                    assert(self.regs.flags.unus3 == False)
-                    assert(self.regs.flags.unus5 == False)
-                    self.regs.A = val >> 8
-                else:
-                    setattr(self.regs, reg_pair, val)
-
-            case 0xc2 | 0xca | 0xd2 | 0xda | 0xe2 | 0xea | 0xf2 | 0xfa: # JCC
-                cond = (instr >> 3) & 0x7
-                if(self.IsConditionTrue(cond)):
-                    self.regs.pc = (imm1 << 8) | imm0
-                    keep_pc = True
-                else:
-                    self.regs.pc += 2
-
-            case 0xc3 | 0xcb: # JMP
-                self.regs.pc = (imm1 << 8) | imm0
-                keep_pc = True
-
-            case 0xc4 | 0xcc | 0xd4 | 0xdc | 0xe4 | 0xec | 0xf4 | 0xfc: # CCC
-                cond = (instr >> 3) & 0x7
-                if(self.IsConditionTrue(cond)):
-                    self.Push16(self.regs.pc + 3)
-                    self.regs.pc = (imm1 << 8) | imm0
-                    cycles += 6
-                    keep_pc = True
-                else:
-                    self.regs.pc += 2
-
-            case 0xc5 | 0xd5 | 0xe5 | 0xf5: # PUSH
-                reg_pair = REG_PAIRS[(instr >> 4) & 0x3]
-                if(reg_pair == "sp"):
-                    self.Push16((self.regs.A << 8) | self.regs.sr)
-                else:
-                    reg_pair_val = getattr(self.regs, reg_pair)
-                    self.Push16(reg_pair_val)
-
-            case 0xc6 | 0xce | 0xd6 | 0xde | 0xe6 | 0xee | 0xf6:
-                if(instr == 0xc6): # ADI
-                    self.regs.flags.carry = (self.regs.A + imm0) > 0xff
-                    self.regs.flags.aux = ((self.regs.A & 0xf) + (imm0 & 0xf)) > 0xf
-                    self.regs.A += imm0
-                elif(instr == 0xce): # ACI
-                    carry_saved = self.regs.flags.carry
-                    self.regs.flags.carry = (self.regs.A + imm0 + self.regs.flags.carry) > 0xff
-                    self.regs.flags.aux = ((self.regs.A & 0xf) + (imm0 & 0xf) + self.regs.flags.carry) > 0xf
-                    self.regs.A += imm0 + carry_saved
-                elif(instr == 0xd6): # SUI
-                    self.regs.flags.carry = (self.regs.A - imm0) < 0
-                    self.regs.flags.aux = ((self.regs.A & 0xf) - (imm0 & 0xf)) < 0
-                    self.regs.A -= imm0
-                elif(instr == 0xde): # SBI
-                    carry_saved = self.regs.flags.carry
-                    self.regs.flags.carry = (self.regs.A - imm0 - self.regs.flags.carry) < 0
-                    self.regs.flags.aux = ((self.regs.A & 0xf) - (imm0 & 0xf) - self.regs.flags.carry) < 0
-                    self.regs.A -= imm0 + carry_saved
-                elif(instr == 0xe6): # ANI
-                    self.regs.flags.carry = False
-                    self.regs.flags.aux = False
-                    self.regs.A &= imm0
-                elif(instr == 0xee): # XRI
-                    self.regs.flags.carry = False
-                    self.regs.flags.aux = False
-                    self.regs.A ^= imm0
-                elif(instr == 0xf6): # ORI
-                    self.regs.flags.carry = False
-                    self.regs.flags.aux = False
-                    self.regs.A |= imm0
-                
-                self.SetFlagsZSP(self.regs.A)
-                self.regs.pc += 1
-
-            case 0xfe: # CPI
-                self.regs.flags.carry = (self.regs.A - imm0) < 0
-                self.regs.flags.aux = ((self.regs.A & 0xf) - (imm0 & 0xf)) < 0
-                res = self.regs.A - imm0
-                self.SetFlagsZSP(res)
-                self.regs.pc += 1
-
-            case 0xc7 | 0xcf | 0xd7 | 0xdf | 0xe7 | 0xef | 0xf7 | 0xff: # RST
-                self.Push16(self.regs.pc)
-                self.regs.pc = 8 * ((instr >> 3) & 7)
-
-            case 0xc9 | 0xd9: # RET
-                self.regs.pc = self.Pop16()
-                keep_pc = True
-
-            case 0xcd | 0xdd | 0xed | 0xfd: # CALL
-                if((imm1 << 8) | imm0 == 0x5):  # Temporary hack for the cpudiag program
-                        if(self.regs.C == 0x9):
-                            offset = self.regs.DE + 3
-                            i = 0
-                            output = ""
-                            while(not output.endswith("$")):
-                                output += chr(self.mem[offset + i])
-                                i += 1
-                            print(output, hex(self.regs.HL))
-                            self.Push16(self.regs.pc + 3)
-                            from sys import exit
-                            exit()
-
-                        elif(self.regs.C == 0x2):
-                            print("Character output routine called")
-                            assert(False)
-
-                self.regs.pc += 3
-                self.Push16(self.regs.pc)
-                self.regs.pc = (imm1 << 8) | imm0
-
-                keep_pc = True
-
-            case 0xd3: # OUT
-                pass
-
-            case 0xdb: # IN
-                pass
-
-            case 0xe3: # XTHL
-                stack_saved = self.Pop16()
-                self.Push16(self.regs.HL)
-                self.regs.HL = stack_saved
-
-            case 0xe9: # PCHL
-                self.regs.pc = self.regs.HL
-                keep_pc = True
-
-            case 0xeb: # XCHG
-                self.regs.HL, self.regs.DE = self.regs.DE, self.regs.HL
-
-            case 0xf3: # DI
-                self.interrupts = False
-
-            case 0xfb: # EI
-                self.interrupts = True
-
-            case 0xf9: # SPHL
-                self.regs.sp = self.regs.HL
-
-            case _:
-                print("Unsupported instruction: " + hex(instr))
-                exit(1)
-
-        if not keep_pc:
+        if not keep_pc[0]:
             self.regs.pc += 1
 
-        return cycles
+        return cycles[0]
+
+    def GenerateInterrupt(self, interrupt_num: int) -> None:
+        self.mem[self.regs.sp - 1] = self.regs.pc >> 8
+        self.mem[self.regs.sp - 2] = self.regs.pc & 0xFF
+        self.regs.sp -= 2
+        self.regs.pc = interrupt_num * 8
+        self.interrupts_enabled = False
+
+
+
+
+
+    def Instr_NOP(self, instr, imm0, imm1, keep_pc, cycles):
+        pass
+
+    def Instr_LXI(self, instr, imm0, imm1, keep_pc, cycles):
+        setattr(self.regs, REG_PAIRS[(instr >> 4) & 0x3], (imm1 << 8) | imm0)
+        self.regs.pc += 2
+
+    def Instr_STAX(self, instr, imm0, imm1, keep_pc, cycles):
+        addr = getattr(self.regs, REG_PAIRS[(instr >> 4) & 0x3])
+        self.mem[addr] = self.regs.A
+
+    def Instr_INX(self, instr, imm0, imm1, keep_pc, cycles):
+        reg_pair = REG_PAIRS[(instr >> 4) & 0x3]
+        reg_pair_val = getattr(self.regs, reg_pair)
+        setattr(self.regs, reg_pair, reg_pair_val + 1)
+
+    def Instr_INR(self, instr, imm0, imm1, keep_pc, cycles):
+        reg = REGS[(instr >> 3) & 0x7]
+        if(reg == "mem"):
+            self.regs.flags.aux = ((self.mem[self.regs.HL] & 0xf) + 1) > 0xf
+            self.mem[self.regs.HL] += 1
+            self.SetFlagsZSP(self.mem[self.regs.HL])
+        else:
+            val = getattr(self.regs, reg)
+            self.regs.flags.aux = ((val & 0xf) + 1) > 0xf
+            setattr(self.regs, reg, val + 1)
+            self.SetFlagsZSP(val + 1)
+
+    def Instr_DCR(self, instr, imm0, imm1, keep_pc, cycles):
+        reg = REGS[(instr >> 3) & 0x7]
+        if(reg == "mem"):
+            self.regs.flags.aux = ((self.mem[self.regs.HL] & 0xf) - 1) < 0
+            self.mem[self.regs.HL] = (self.mem[self.regs.HL] - 1) & 0xff
+            self.SetFlagsZSP(self.mem[self.regs.HL])
+        else:
+            val = getattr(self.regs, reg)
+            self.regs.flags.aux = ((val & 0xf) - 1) < 0
+            setattr(self.regs, reg, val - 1)
+            self.SetFlagsZSP(val - 1)
+
+    def Instr_MVI(self, instr, imm0, imm1, keep_pc, cycles):
+        reg = REGS[(instr >> 3) & 0x7]
+        if(reg == "mem"):
+            self.mem[self.regs.HL] = imm0
+        else:
+            setattr(self.regs, reg, imm0)
+        self.regs.pc += 1
+
+    def Instr_RLC(self, instr, imm0, imm1, keep_pc, cycles):
+        self.regs.flags.carry = self.regs.A >> 7
+        self.regs.A = self.regs.A << 1 | self.regs.flags.carry
+
+    def Instr_DAD(self, instr, imm0, imm1, keep_pc, cycles):
+        reg_pair = REG_PAIRS[(instr >> 4) & 0x3]
+        reg_pair_val = getattr(self.regs, reg_pair)
+        self.regs.flags.carry = (self.regs.HL + reg_pair_val) > 0xffff
+        self.regs.HL = self.regs.HL + reg_pair_val
+
+    def Instr_LDAX(self, instr, imm0, imm1, keep_pc, cycles):
+        addr = getattr(self.regs, REG_PAIRS[(instr >> 4) & 0x3])
+        self.regs.A = self.mem[addr]
+
+    def Instr_DCX(self, instr, imm0, imm1, keep_pc, cycles):
+        reg_pair = REG_PAIRS[(instr >> 4) & 0x3]
+        reg_pair_val = getattr(self.regs, reg_pair)
+        setattr(self.regs, reg_pair, reg_pair_val - 1)
+
+    def Instr_RRC(self, instr, imm0, imm1, keep_pc, cycles):
+        self.regs.flags.carry = self.regs.A & 1
+        self.regs.A = (self.regs.flags.carry << 7) | (self.regs.A >> 1)
+
+    def Instr_RAL(self, instr, imm0, imm1, keep_pc, cycles):
+        carry_saved = self.regs.flags.carry
+        self.regs.flags.carry = self.regs.A >> 7
+        self.regs.A = self.regs.A << 1 | carry_saved
+
+    def Instr_RAR(self, instr, imm0, imm1, keep_pc, cycles):
+        carry_saved = self.regs.flags.carry
+        self.regs.flags.carry = self.regs.A & 1
+        self.regs.A = (carry_saved << 7) | (self.regs.A >> 1)
+
+    def Instr_SHLD(self, instr, imm0, imm1, keep_pc, cycles):
+        mem_loc = (imm1 << 8) | imm0
+        self.mem[mem_loc] = self.regs.L
+        self.mem[mem_loc + 1] = self.regs.H
+        self.regs.pc += 2
+
+    def Instr_DAA(self, instr, imm0, imm1, keep_pc, cycles):
+        if((self.regs.A & 0xf) > 9 or self.regs.flags.aux):
+            self.regs.flags.aux = (self.regs.A & 0xf) > 9
+            self.regs.A += 6
+        
+        if((self.regs.A >> 4) > 9 or self.regs.flags.carry):
+            self.regs.flags.carry = (self.regs.A + (6 << 4)) > 0xff
+            self.regs.A += 6 << 4
+
+
+        self.SetFlagsZSP(self.regs.A)
+
+    def Instr_LHLD(self, instr, imm0, imm1, keep_pc, cycles):
+        mem_loc = (imm1 << 8) | imm0
+        self.regs.L = self.mem[mem_loc]
+        self.regs.H = self.mem[mem_loc + 1]
+        self.regs.pc += 2
+
+    def Instr_CMA(self, instr, imm0, imm1, keep_pc, cycles):
+        self.regs.A = ~self.regs.A
+
+    def Instr_STA(self, instr, imm0, imm1, keep_pc, cycles):
+        mem_loc = (imm1 << 8) | imm0
+        self.mem[mem_loc] = self.regs.A
+        self.regs.pc += 2
+
+    def Instr_STC(self, instr, imm0, imm1, keep_pc, cycles):
+        self.regs.flags.carry = True
+
+    def Instr_LDA(self, instr, imm0, imm1, keep_pc, cycles):
+        mem_loc = (imm1 << 8) | imm0
+        self.regs.A = self.mem[mem_loc]
+        self.regs.pc += 2
+
+    def Instr_CMC(self, instr, imm0, imm1, keep_pc, cycles):
+        self.regs.flags.carry = not self.regs.flags.carry
+
+    def Instr_MOV(self, instr, imm0, imm1, keep_pc, cycles):
+        reg1 = REGS[(instr >> 3) & 0x7]
+        reg2 = REGS[instr & 0x7]
+        if(reg1 == "mem"):
+            self.mem[self.regs.HL] = getattr(self.regs, reg2)
+        elif(reg2 == "mem"):
+            setattr(self.regs, reg1, self.mem[self.regs.HL])
+        else:
+            setattr(self.regs, reg1, getattr(self.regs, reg2))
+
+    def Instr_HLT(self, instr, imm0, imm1, keep_pc, cycles):
+        exit(0, "Halt instruction")
+
+    def InstrGrp1(self, instr, imm0, imm1, keep_pc, cycles):
+        reg = REGS[instr & 0x7]
+        if(reg == "mem"):
+            reg_val = self.mem[self.regs.HL]
+        else:
+            reg_val = getattr(self.regs, reg)
+        
+        if (instr >= 0x80 and instr <= 0x87): # ADD
+            self.regs.flags.carry = (self.regs.A + reg_val) > 0xff
+            self.regs.flags.aux = ((self.regs.A & 0xf) + (reg_val & 0xf)) > 0xf
+            self.regs.A += reg_val
+        elif (instr >= 0x88 and instr <= 0x8f): # ADC
+            carry_saved = self.regs.flags.carry
+            self.regs.flags.carry = (self.regs.A + reg_val + self.regs.flags.carry) > 0xff
+            self.regs.flags.aux = ((self.regs.A & 0xf) + (reg_val & 0xf) + self.regs.flags.carry) > 0xf
+            self.regs.A += reg_val + carry_saved
+        elif (instr >= 0x90 and instr <= 0x97): # SUB
+            self.regs.flags.carry = (self.regs.A - reg_val) < 0
+            self.regs.flags.aux = ((self.regs.A & 0xf) - (reg_val & 0xf)) < 0
+            self.regs.A -= reg_val
+        elif (instr >= 0x98 and instr <= 0x9f): # SBB
+            carry_saved = self.regs.flags.carry
+            self.regs.flags.carry = (self.regs.A - reg_val - self.regs.flags.carry) < 0
+            self.regs.flags.aux = ((self.regs.A & 0xf) - (reg_val & 0xf) - self.regs.flags.carry) < 0
+            self.regs.A -= reg_val + carry_saved
+        elif (instr >= 0xa0 and instr <= 0xa7): # ANA
+            self.regs.flags.carry = False
+            self.regs.flags.aux = False
+            self.regs.A &= reg_val
+        elif (instr >= 0xa8 and instr <= 0xaf): # XRA
+            self.regs.flags.carry = False
+            self.regs.flags.aux = False
+            self.regs.A ^= reg_val
+        elif (instr >= 0xb0 and instr <= 0xb7): # ORA
+            self.regs.flags.carry = False
+            self.regs.flags.aux = False
+            self.regs.A |= reg_val
+            
+        self.SetFlagsZSP(self.regs.A)
+    
+    def Instr_CMP(self, instr, imm0, imm1, keep_pc, cycles):
+        reg = REGS[instr & 0x7]
+        if(reg == "mem"):
+            reg_val = self.mem[self.regs.HL]
+        else:
+            reg_val = getattr(self.regs, reg)
+        res = (self.regs.A - reg_val) < 0
+        self.regs.flags.aux = ((self.regs.A & 0xf) - (reg_val & 0xf)) < 0
+        self.SetFlagsZSP(res)
+
+    def Instr_RCC(self, instr, imm0, imm1, keep_pc, cycles):
+        cond = (instr >> 3) & 0x7
+        if(self.IsConditionTrue(cond)):
+            self.regs.pc = self.Pop16()
+            cycles[0] += 6
+            keep_pc[0] = True
+
+    def Instr_POP(self, instr, imm0, imm1, keep_pc, cycles):
+        val = self.Pop16()
+        reg_pair = REG_PAIRS[(instr >> 4) & 0x3]
+        if(reg_pair == "sp"):
+            self.regs.sr = val & 0xff
+            assert(self.regs.flags.unus1 == True)
+            assert(self.regs.flags.unus3 == False)
+            assert(self.regs.flags.unus5 == False)
+            self.regs.A = val >> 8
+        else:
+            setattr(self.regs, reg_pair, val)
+
+    def Instr_JCC(self, instr, imm0, imm1, keep_pc, cycles):
+        cond = (instr >> 3) & 0x7
+        if(self.IsConditionTrue(cond)):
+            self.regs.pc = (imm1 << 8) | imm0
+            keep_pc[0] = True
+        else:
+            self.regs.pc += 2
+
+    def Instr_JMP(self, instr, imm0, imm1, keep_pc, cycles):
+        self.regs.pc = (imm1 << 8) | imm0
+        keep_pc[0] = True
+
+    def Instr_CCC(self, instr, imm0, imm1, keep_pc, cycles):
+        cond = (instr >> 3) & 0x7
+        if(self.IsConditionTrue(cond)):
+            self.Push16(self.regs.pc + 3)
+            self.regs.pc = (imm1 << 8) | imm0
+            cycles[0] += 6
+            keep_pc[0] = True
+        else:
+            self.regs.pc += 2
+
+    def Instr_PUSH(self, instr, imm0, imm1, keep_pc, cycles):
+        reg_pair = REG_PAIRS[(instr >> 4) & 0x3]
+        if(reg_pair == "sp"):
+            self.Push16((self.regs.A << 8) | self.regs.sr)
+        else:
+            reg_pair_val = getattr(self.regs, reg_pair)
+            self.Push16(reg_pair_val)
+
+    def InstrGrp2(self, instr, imm0, imm1, keep_pc, cycles):
+        if(instr == 0xc6): # ADI
+            self.regs.flags.carry = (self.regs.A + imm0) > 0xff
+            self.regs.flags.aux = ((self.regs.A & 0xf) + (imm0 & 0xf)) > 0xf
+            self.regs.A += imm0
+        elif(instr == 0xce): # ACI
+            carry_saved = self.regs.flags.carry
+            self.regs.flags.carry = (self.regs.A + imm0 + self.regs.flags.carry) > 0xff
+            self.regs.flags.aux = ((self.regs.A & 0xf) + (imm0 & 0xf) + self.regs.flags.carry) > 0xf
+            self.regs.A += imm0 + carry_saved
+        elif(instr == 0xd6): # SUI
+            self.regs.flags.carry = (self.regs.A - imm0) < 0
+            self.regs.flags.aux = ((self.regs.A & 0xf) - (imm0 & 0xf)) < 0
+            self.regs.A -= imm0
+        elif(instr == 0xde): # SBI
+            carry_saved = self.regs.flags.carry
+            self.regs.flags.carry = (self.regs.A - imm0 - self.regs.flags.carry) < 0
+            self.regs.flags.aux = ((self.regs.A & 0xf) - (imm0 & 0xf) - self.regs.flags.carry) < 0
+            self.regs.A -= imm0 + carry_saved
+        elif(instr == 0xe6): # ANI
+            self.regs.flags.carry = False
+            self.regs.flags.aux = False
+            self.regs.A &= imm0
+        elif(instr == 0xee): # XRI
+            self.regs.flags.carry = False
+            self.regs.flags.aux = False
+            self.regs.A ^= imm0
+        elif(instr == 0xf6): # ORI
+            self.regs.flags.carry = False
+            self.regs.flags.aux = False
+            self.regs.A |= imm0
+        
+        self.SetFlagsZSP(self.regs.A)
+        self.regs.pc += 1
+
+    def Instr_CPI(self, instr, imm0, imm1, keep_pc, cycles):
+        self.regs.flags.carry = (self.regs.A - imm0) < 0
+        self.regs.flags.aux = ((self.regs.A & 0xf) - (imm0 & 0xf)) < 0
+        res = self.regs.A - imm0
+        self.SetFlagsZSP(res)
+        self.regs.pc += 1
+
+    def Instr_RST(self, instr, imm0, imm1, keep_pc, cycles):
+        self.Push16(self.regs.pc)
+        self.regs.pc = 8 * ((instr >> 3) & 7)
+
+    def Instr_RET(self, instr, imm0, imm1, keep_pc, cycles):
+        self.regs.pc = self.Pop16()
+        keep_pc[0] = True
+
+    def Instr_CALL(self, instr, imm0, imm1, keep_pc, cycles):
+        if((imm1 << 8) | imm0 == 0x5):  # Hack for the cpudiag program
+                if(self.regs.C == 0x9):
+                    offset = self.regs.DE + 3
+                    i = 0
+                    output = ""
+                    while(not output.endswith("$")):
+                        output += chr(self.mem[offset + i])
+                        i += 1
+                    print(output, hex(self.regs.HL))
+                    self.Push16(self.regs.pc + 3)
+                    from sys import exit
+                    exit()
+
+                elif(self.regs.C == 0x2):
+                    print("Character output routine called")
+                    assert(False)
+
+        self.regs.pc += 3
+        self.Push16(self.regs.pc)
+        self.regs.pc = (imm1 << 8) | imm0
+
+        keep_pc[0] = True
+
+    def Instr_OUT(self, instr, imm0, imm1, keep_pc, cycles):
+        port = imm0
+        if(port == 2):
+            self.regs.shift_off = self.regs.A & 0x7
+        elif(port == 3):
+            self.audio.PlaySound3(self.regs.A)
+        elif(port == 4):
+            self.regs.shift_lo = self.regs.shift_hi
+            self.regs.shift_hi = self.regs.A
+        elif(port == 5):
+            self.audio.PlaySound5(self.regs.A)
+        self.regs.pc += 1
+
+    def Instr_IN(self, instr, imm0, imm1, keep_pc, cycles):
+        port = imm0
+        if(port == 1):
+            self.regs.A = self.regs.input1
+        elif(port == 2):
+                self.regs.A = self.regs.input2
+        elif(port == 3):
+                self.regs.A = (self.regs.shift_full >> (8 - self.regs.shift_off)) & 0xff
+        self.regs.pc += 1
+
+    def Instr_XTHL(self, instr, imm0, imm1, keep_pc, cycles):
+        stack_saved = self.Pop16()
+        self.Push16(self.regs.HL)
+        self.regs.HL = stack_saved
+
+    def Instr_PCHL(self, instr, imm0, imm1, keep_pc, cycles):
+        self.regs.pc = self.regs.HL
+        keep_pc[0] = True
+
+    def Instr_XCHG(self, instr, imm0, imm1, keep_pc, cycles):
+        self.regs.HL, self.regs.DE = self.regs.DE, self.regs.HL
+
+    def Instr_DI(self, instr, imm0, imm1, keep_pc, cycles):
+        self.interrupts_enabled = False
+
+    def Instr_EI(self, instr, imm0, imm1, keep_pc, cycles):
+        self.interrupts_enabled = True
+
+    def Instr_SPHL(self, instr, imm0, imm1, keep_pc, cycles):
+        self.regs.sp = self.regs.HL

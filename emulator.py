@@ -18,14 +18,14 @@ class Emulator:
 
         pygame.display.set_icon(pygame.image.load("icon.bmp"))
         pygame.display.set_caption("Space Invaders")
-        self.native = pygame.Surface((224, 256))
         self.scaled = pygame.display.set_mode((672, 768))
 
         self.audio = Audio()
-        self.mem = Memory()
-        self.cpu = CPU(self.mem)
+        self.memory = Memory()
+        self.mem = self.memory.mem
+        self.cpu = CPU(self.memory, self.audio)
 
-        self.mem.LoadRom(rom_path)
+        self.memory.LoadRom(rom_path)
         self.running = True
 
     def Run(self) -> None:
@@ -44,19 +44,35 @@ class Emulator:
             cycle_tot += cycles
             cycle_var += cycles
 
-            #if(cycle_var >= CYCLES_PER_HALF_FRAME - 19 and self.i8080.interrupt):
-            #    if(first_interrupt):
-            #        self.interp.GenerateInterrupt(self.i8080, 1)
-            #        first_interrupt = False
-            #        cycle_var = 0
-            #    else:
-            #        self.interp.GenerateInterrupt(self.i8080, 2)
+            if(cycle_var >= CYCLES_PER_HALF_FRAME - 19 and self.cpu.interrupts_enabled):
+                if(first_interrupt):
+                    self.cpu.GenerateInterrupt(1)
+                    first_interrupt = False
+                    cycle_var = 0
+                else:
+                    self.cpu.GenerateInterrupt(2)
 
     def DrawFrame(self) -> None:
-        self.native.fill(pygame.Color(0, 0, 0, 0))
-        #hotcode.GenBitmap(self.native, self.i8080.memory)
-        pygame.transform.scale(self.native, (672, 768), self.scaled)
-        pygame.display.update()
+        surface = pygame.Surface((256, 224))
+        pixelarray = pygame.PixelArray(surface)
+        for i, vram_byte in enumerate(self.mem[0x2400: 0x4000]):
+            for j in range(8):
+                if((vram_byte >> j) & 1):
+                    pixelarray[((i*8) + j) % 256, (i*8) // 256] = 0xffffff # White
+
+        """ #self.native.fill(pygame.Color(0, 0, 0, 0))
+        for i in range(256):  # Height
+            index = 0x2400 + (i << 5)
+            for j in range(32):
+                vram_byte = self.mem[index]
+                index += 1
+                for k in range(8):
+                    if(vram_byte & 1):
+                        pixelarray[i, 255 - j*8 - k] = 0xffffff00 # White
+                    vram_byte = vram_byte >> 1 """
+
+        pygame.transform.scale(pygame.transform.rotate(surface, 90.0), (672, 768), self.scaled)
+        pygame.display.flip()
 
     def HandleEvents(self) -> None:
         for event in pygame.event.get():
@@ -77,37 +93,37 @@ class Emulator:
             match event.type:
                 case pygame.KEYDOWN: # A.W.D for player 1, left.up.right for player 2
                     key = pygame.key.name(event.key)
-                    if(key == "a"): pass
-                    elif(key == "d"): pass
-                    elif(key == "w"): pass
-                    elif(key == "e"): pass
-                    elif(key == "left"): pass
-                    elif(key == "right"): pass
-                    elif(key == "up"): pass
-                    elif(key == "right ctrl"): pass
-                    elif(key == "space"): pass
+                    if(key == "a"): self.cpu.regs.input1 |= 0b00100000
+                    elif(key == "d"): self.cpu.regs.input1 |= 0b01000000
+                    elif(key == "w"): self.cpu.regs.input1 |= 0b00010000
+                    elif(key == "e"): self.cpu.regs.input1 |= 0b00000100
+                    elif(key == "left"): self.cpu.regs.input2 |= 0b00100000
+                    elif(key == "right"): self.cpu.regs.input2 |= 0b01000000
+                    elif(key == "up"): self.cpu.regs.input2 |= 0b00010000
+                    elif(key == "right ctrl"): self.cpu.regs.input1 |= 0b00000010
+                    elif(key == "space"): self.cpu.regs.input2 |= 0b00000100
                     # Dipswitches(they don't need a keyup event) and exit:
-                    elif(key == "return"): pass
-                    elif(key == "`"): pass
-                    elif(key == "1"): pass
-                    elif(key == "2"): pass
-                    elif(key == "3"): pass
-                    elif(key == "4"): pass
-                    elif(key == "5"): pass
-                    elif(key == "6"): pass
-                    elif(key == "7"): pass
+                    elif(key == "return"): self.cpu.regs.input1 &= 0b11111110
+                    elif(key == "`"): self.cpu.regs.input2 &= 0b11111100
+                    elif(key == "1"): self.cpu.regs.input2 &= 0b11111100; self.cpu.regs.input2 += 1
+                    elif(key == "2"): self.cpu.regs.input2 &= 0b11111100; self.cpu.regs.input2 += 2
+                    elif(key == "3"): self.cpu.regs.input2 &= 0b11111100; self.cpu.regs.input2 += 3
+                    elif(key == "4"): self.cpu.regs.input2 |= 0b00001000
+                    elif(key == "5"): self.cpu.regs.input2 &= 0b11110111
+                    elif(key == "6"): self.cpu.regs.input2 |= 0b10000000
+                    elif(key == "7"): self.cpu.regs.input2 &= 0b01111111
                     elif(key == "escape"): self.running = False
                 case pygame.KEYUP:
                     key = pygame.key.name(event.key)
-                    if(key == "a"): pass
-                    elif(key == "d"): pass
-                    elif(key == "w"): pass
-                    elif(key == "e"): pass
-                    elif(key == "left"): pass
-                    elif(key == "right"): pass
-                    elif(key == "up"): pass
-                    elif(key == "right ctrl"): pass
-                    elif(key == "space"): pass
-                    elif(key == "return"): pass
+                    if(key == "a"): self.cpu.regs.input1 &= 0b11011111
+                    elif(key == "d"): self.cpu.regs.input1 &= 0b10111111
+                    elif(key == "w"): self.cpu.regs.input1 &= 0b11101111
+                    elif(key == "e"): self.cpu.regs.input1 &= 0b11111011
+                    elif(key == "left"): self.cpu.regs.input2 &= 0b11011111
+                    elif(key == "right"): self.cpu.regs.input2 &= 0b10111111
+                    elif(key == "up"): self.cpu.regs.input2 &= 0b11101111
+                    elif(key == "right ctrl"): self.cpu.regs.input1 &= 0b11111101
+                    elif(key == "space"): self.cpu.regs.input2 &= 0b11111011
+                    elif(key == "return"): self.cpu.regs.input1 |= 0b1
                 case pygame.QUIT:
                     self.running = False
