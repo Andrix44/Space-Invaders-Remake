@@ -1,4 +1,5 @@
 __pycache__/*
 *.wav
-*.rom
+ROMS/*
 .vscode/launch.json
+log.txt

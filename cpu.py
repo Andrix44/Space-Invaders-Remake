@@ -282,7 +282,6 @@ class CPU:
             self.regs.flags.carry = (self.regs.A + (6 << 4)) > 0xff
             self.regs.A += 6 << 4
 
-
         self.SetFlagsZSP(self.regs.A)
 
     def Instr_LHLD(self, instr, imm0, imm1, keep_pc, cycles):
@@ -369,9 +368,9 @@ class CPU:
             reg_val = self.mem[self.regs.HL]
         else:
             reg_val = getattr(self.regs, reg)
-        res = (self.regs.A - reg_val) < 0
+        self.regs.flags.carry = (self.regs.A - reg_val) < 0
         self.regs.flags.aux = ((self.regs.A & 0xf) - (reg_val & 0xf)) < 0
-        self.SetFlagsZSP(res)
+        self.SetFlagsZSP(self.regs.A - reg_val)
 
     def Instr_RCC(self, instr, imm0, imm1, keep_pc, cycles):
         cond = (instr >> 3) & 0x7
@@ -473,22 +472,18 @@ class CPU:
         keep_pc[0] = True
 
     def Instr_CALL(self, instr, imm0, imm1, keep_pc, cycles):
-        if((imm1 << 8) | imm0 == 0x5):  # Hack for the cpudiag program
+        if((imm1 << 8) | imm0 == 0x5):  # Output hack
                 if(self.regs.C == 0x9):
-                    offset = self.regs.DE + 3
+                    offset = self.regs.DE
                     i = 0
                     output = ""
                     while(not output.endswith("$")):
                         output += chr(self.mem[offset + i])
                         i += 1
                     print(output, hex(self.regs.HL))
-                    self.Push16(self.regs.pc + 3)
-                    from sys import exit
-                    exit()
-
+                    
                 elif(self.regs.C == 0x2):
-                    print("Character output routine called")
-                    assert(False)
+                    print(chr(self.regs.E), end='')
 
         self.regs.pc += 3
         self.Push16(self.regs.pc)

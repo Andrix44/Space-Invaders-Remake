@@ -1,15 +1,15 @@
 
 
 class Memory:
-    def __init__(self) -> None:
+    def __init__(self, rom_path: str, debug: bool) -> None:
         self.mem = bytearray()
-
-    def LoadRom(self, rom_path) -> None:
         with open(rom_path, 'rb') as f:
             data = f.read()
-            if(len(data) == 0x5ad and data[3:0x45] == b"MICROCOSM ASSOCIATES 8080/8085 CPU DIAGNOSTIC VERSION 1.0 (C) 1980"):
+            if(debug): # 
                 self.mem.extend(bytearray(0x100))
                 self.mem.extend(data)
+                self.mem[0x5] = 0xc9 # RET
             else:
                 self.mem.extend(bytearray(data))
-        self.mem.extend(bytearray(0x4000 - len(self.mem)))
+        #self.mem.extend(bytearray(0x4000 - len(self.mem)))
+        self.mem.extend(bytearray(0x10000 - len(self.mem)))

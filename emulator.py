@@ -11,7 +11,7 @@ CYCLES_PER_HALF_FRAME = CYCLES_PER_FRAME // 2
 
 
 class Emulator:
-    def __init__(self, rom_path) -> None:
+    def __init__(self, rom_path: str, debug: bool) -> None:
         pygame.init()
         pygame.event.set_blocked(None)
         pygame.event.set_allowed((pygame.KEYDOWN, pygame.KEYUP, pygame.QUIT))
@@ -21,11 +21,13 @@ class Emulator:
         self.scaled = pygame.display.set_mode((672, 768))
 
         self.audio = Audio()
-        self.memory = Memory()
+        self.memory = Memory(rom_path, debug)
         self.mem = self.memory.mem
         self.cpu = CPU(self.memory, self.audio)
 
-        self.memory.LoadRom(rom_path)
+        if(debug):
+            self.cpu.regs.pc = 0x100
+
         self.running = True
 
     def Run(self) -> None:
