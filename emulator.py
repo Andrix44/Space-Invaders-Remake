@@ -11,6 +11,7 @@ CYCLES_PER_HALF_FRAME = CYCLES_PER_FRAME // 2
 
 
 class Emulator:
+    """The foundation that ties together the other modules"""
     def __init__(self, rom_path: str, debug: bool) -> None:
         pygame.init()
         pygame.event.set_blocked(None)
@@ -25,12 +26,14 @@ class Emulator:
         self.mem = self.memory.mem
         self.cpu = CPU(self.memory, self.audio)
 
+        # Most of the debug ROMs are loaded at address 0x100
         if(debug):
             self.cpu.regs.pc = 0x100
 
         self.running = True
 
     def Run(self) -> None:
+        """Runs the main loop of the emulation"""
         clock = pygame.time.Clock()
         while(self.running):
             clock.tick(REFRESH_RATE)
@@ -39,6 +42,7 @@ class Emulator:
             self.DrawFrame()
 
     def RunFrame(self) -> None:
+        """Runs the emulation for one complete frame"""
         first_interrupt = True
         cycle_tot = cycle_var = 0
         while(cycle_tot <= CYCLES_PER_FRAME):
@@ -55,6 +59,7 @@ class Emulator:
                     self.cpu.GenerateInterrupt(2)
 
     def DrawFrame(self) -> None:
+        """Load the data contained in the VRAM into the surface that the user sees"""
         surface = pygame.Surface((256, 224))
         pixelarray = pygame.PixelArray(surface)
         for i, vram_byte in enumerate(self.mem[0x2400: 0x4000]):
@@ -62,21 +67,11 @@ class Emulator:
                 if((vram_byte >> j) & 1):
                     pixelarray[((i*8) + j) % 256, (i*8) // 256] = 0xffffff # White
 
-        """ #self.native.fill(pygame.Color(0, 0, 0, 0))
-        for i in range(256):  # Height
-            index = 0x2400 + (i << 5)
-            for j in range(32):
-                vram_byte = self.mem[index]
-                index += 1
-                for k in range(8):
-                    if(vram_byte & 1):
-                        pixelarray[i, 255 - j*8 - k] = 0xffffff00 # White
-                    vram_byte = vram_byte >> 1 """
-
         pygame.transform.scale(pygame.transform.rotate(surface, 90.0), (672, 768), self.scaled)
         pygame.display.flip()
 
     def HandleEvents(self) -> None:
+        """Handles keyboard presses and the quit event"""
         for event in pygame.event.get():
             """
             Controls: Player 1: A - left    Player 2 : left arrow  - left

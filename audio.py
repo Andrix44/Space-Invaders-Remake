@@ -2,6 +2,7 @@ from pygame import mixer
 
 
 class Audio:
+    """A simple audio module for playing the prerecorded sounds for Space Invaders"""
     def __init__(self) -> None:
         try:
             self.sound_ufo = mixer.Sound("samples/0.wav")
@@ -22,6 +23,7 @@ class Audio:
             self.audio_enabled = False
 
     def PlaySound3(self, id: int) -> None:
+        """Play sounds used by port 3"""
         if(self.audio_enabled and self.last_played_3 != id):
             if(id & 1 and not self.last_played_3 & 1):
                 self.sound_ufo.play(-1)
@@ -36,6 +38,7 @@ class Audio:
             self.last_played_3 = id
 
     def PlaySound5(self, id: int) -> None:
+        """Play sounds used by port 3"""
         if(self.audio_enabled and self.last_played_5 != id):
             if(id & 1 and not self.last_played_5 & 1):
                 self.sound_fleet_1.play()

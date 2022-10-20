@@ -4,7 +4,7 @@ from sys import exit
 from audio import Audio
 from memory import Memory
 
-
+# Most instruction run in a specific amount of cycles which can be turned into a LUT
 CYCLE_LUT = (4, 10, 7,  5,  5,  5,  7,  4,  4, 10, 7,  5,  5,  5,  7, 4,   # 0x0X
              4, 10, 7,  5,  5,  5,  7,  4,  4, 10, 7,  5,  5,  5,  7, 4,   # 0x1X
              4, 10, 16, 5,  5,  5,  7,  4,  4, 10, 16, 5,  5,  5,  7, 4,   # 0x2X
@@ -26,7 +26,7 @@ REG_PAIRS = ("BC", "DE", "HL", "sp")
 REGS = ("B", "C", "D", "E", "H", "L", "mem", "A")
 
 class Registers(Structure):
-
+    """Uses ctypes structs and unions to let the programmer access the registers as a whole or in smaller parts"""
     class StatusReg(Union):
         class Flags(BigEndianStructure):
             _fields_ = [("sign", c_uint8, 1), ("zero", c_uint8, 1),
@@ -78,6 +78,7 @@ class Registers(Structure):
 
 
 class CPU:
+    """The main part of the emulator, an Intel 8080 interpreter"""
     def __init__(self, mem: Memory, audio: Audio) -> None:
         self.regs = Registers()
         self.regs.flags.unus1 = True
@@ -122,11 +123,13 @@ class CPU:
                            self.Instr_RCC, self.Instr_SPHL,self.Instr_JCC , self.Instr_EI,  self.Instr_CCC, self.Instr_CALL,self.Instr_CPI, self.Instr_RST)
 
     def SetFlagsZSP(self, val: int) -> None:
+        """Sets the zero, sign and parity flags based on the argument"""
         self.regs.flags.zero = val == 0
         self.regs.flags.sign = val >> 7
         self.regs.flags.parity = not bin(val).count('1') & 1
 
     def IsConditionTrue(self, cond: int) -> bool:
+        """Return whether the condition is true or false"""
         match cond:
             case 0: # Not zero
                 return not self.regs.flags.zero
@@ -146,36 +149,39 @@ class CPU:
                 return self.regs.flags.sign
 
     def Push16(self, val: int) -> None:
+        """Pushes a 2 bytes onto the stack"""
         self.mem[self.regs.sp - 1] = val >> 8
         self.mem[self.regs.sp - 2] = val & 0xff
         self.regs.sp -= 2
-        #print("Pushed: " + hex(val))
 
     def Pop16(self) -> int:
+        """Pops 2 bytes from the stack"""
         val = (self.mem[self.regs.sp + 1] << 8) | self.mem[self.regs.sp]
         self.regs.sp += 2
-        #print("Popped: " + hex(val))
         return val
 
     def Step(self) -> int:
+        """Executes 1 instruction"""
         instr = self.mem[self.regs.pc]
         imm0 = self.mem[self.regs.pc + 1]
         imm1 = self.mem[self.regs.pc + 2]
 
+        # These two have to be single element arrays so that they get passed to the instruction handlers by reference
         keep_pc = [False]
         cycles = [CYCLE_LUT[instr]]
-        #print(hex(self.regs.pc) + ': ' + hex(instr) + ' ' + hex(imm0) + ' ' + hex(imm1))
-        #with open("log.txt", 'a') as f:
-        #    f.write(f"[{self.regs.sp}] {hex(self.regs.pc)}: {hex(instr)}: {hex(self.regs.A)} {hex(self.regs.B)} {hex(self.regs.C)} {hex(self.regs.D)} {hex(self.regs.E)} {hex(self.regs.H)} {hex(self.regs.L)} {bool(self.regs.flags.sign)} {bool(self.regs.flags.zero)} {bool(self.regs.flags.parity)} {bool(self.regs.flags.carry)} {bool(self.regs.flags.aux)}\n")
 
+        #print(hex(self.regs.pc) + ': ' + hex(instr) + ' ' + hex(imm0) + ' ' + hex(imm1))
         self.jump_table[instr](instr, imm0, imm1, keep_pc, cycles)
 
+        # A simplification for instructions that didn't modify the program counter and only have a length of 1
+        # Instructions with immediate values still have to increment pc by the number of their immediates
         if not keep_pc[0]:
             self.regs.pc += 1
 
         return cycles[0]
 
     def GenerateInterrupt(self, interrupt_num: int) -> None:
+        """Injects an interrupt that was generated during rendering"""
         self.mem[self.regs.sp - 1] = self.regs.pc >> 8
         self.mem[self.regs.sp - 2] = self.regs.pc & 0xFF
         self.regs.sp -= 2
@@ -183,8 +189,11 @@ class CPU:
         self.interrupts_enabled = False
 
 
+    ########################
+    # Instruction handlers #
+    ########################
 
-
+    # Many of them are used in several instruction variants
 
     def Instr_NOP(self, instr, imm0, imm1, keep_pc, cycles):
         pass

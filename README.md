@@ -1,5 +1,8 @@
 ##
-A remake of my previous Space Invaders emulator
+A remake of my previous Space Invaders emulator.
+I tried to use some of Python's newer features and also some tricks that I had learned. You no longer have to compile a cython module to achieve playable speeds.
+## Requirements
+ - pygame
 ## Controls
                       Player 1: A - left    Player 2 : left arrow  - left
                                 D - right              right arrow - right

@@ -2,4 +2,3 @@ __pycache__/*
 *.wav
 ROMS/*
 .vscode/launch.json
-log.txt
