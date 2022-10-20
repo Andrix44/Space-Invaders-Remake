@@ -11,4 +11,3 @@ if __name__ == "__main__":
     
     emu = Emulator(args.path, args.debug)
     emu.Run()
-    pass

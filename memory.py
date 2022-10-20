@@ -12,4 +12,4 @@ class Memory:
             else:
                 self.mem.extend(bytearray(data))
         #self.mem.extend(bytearray(0x4000 - len(self.mem)))
-        self.mem.extend(bytearray(0x10000 - len(self.mem)))
+        self.mem.extend(bytearray(0x4000 - len(self.mem)))

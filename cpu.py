@@ -66,7 +66,7 @@ class Registers(Structure):
 
     class Shift(Union):
         class Shift_8_8(BigEndianStructure):
-            _fields_ = [("shift_hi", c_uint8, 8), ("shift_lo", c_uint8, 8)]
+            _fields_ = [("shift_lo", c_uint8, 8), ("shift_hi", c_uint8, 8)]
 
         _anonymous_ = ("Shift8_8",)
         _fields_ = [("shift_full", c_uint16), ("Shift8_8", Shift_8_8)]
@@ -339,13 +339,13 @@ class CPU:
             self.regs.flags.aux = ((self.regs.A & 0xf) + (reg_val & 0xf) + self.regs.flags.carry) > 0xf
             self.regs.A += reg_val + carry_saved
         elif (instr >= 0x90 and instr <= 0x97): # SUB
-            self.regs.flags.carry = (self.regs.A - reg_val) < 0
-            self.regs.flags.aux = ((self.regs.A & 0xf) - (reg_val & 0xf)) < 0
+            self.regs.flags.carry = self.regs.A < reg_val
+            self.regs.flags.aux = (self.regs.A & 0xf) < (reg_val & 0xf)
             self.regs.A -= reg_val
         elif (instr >= 0x98 and instr <= 0x9f): # SBB
             carry_saved = self.regs.flags.carry
-            self.regs.flags.carry = (self.regs.A - reg_val - self.regs.flags.carry) < 0
-            self.regs.flags.aux = ((self.regs.A & 0xf) - (reg_val & 0xf) - self.regs.flags.carry) < 0
+            self.regs.flags.carry = self.regs.A < reg_val + self.regs.flags.carry
+            self.regs.flags.aux = (self.regs.A & 0xf) < (reg_val & 0xf) + self.regs.flags.carry
             self.regs.A -= reg_val + carry_saved
         elif (instr >= 0xa0 and instr <= 0xa7): # ANA
             self.regs.flags.carry = False
@@ -432,13 +432,13 @@ class CPU:
             self.regs.flags.aux = ((self.regs.A & 0xf) + (imm0 & 0xf) + self.regs.flags.carry) > 0xf
             self.regs.A += imm0 + carry_saved
         elif(instr == 0xd6): # SUI
-            self.regs.flags.carry = (self.regs.A - imm0) < 0
-            self.regs.flags.aux = ((self.regs.A & 0xf) - (imm0 & 0xf)) < 0
+            self.regs.flags.carry = self.regs.A < imm0
+            self.regs.flags.aux = (self.regs.A & 0xf) < (imm0 & 0xf)
             self.regs.A -= imm0
         elif(instr == 0xde): # SBI
             carry_saved = self.regs.flags.carry
-            self.regs.flags.carry = (self.regs.A - imm0 - self.regs.flags.carry) < 0
-            self.regs.flags.aux = ((self.regs.A & 0xf) - (imm0 & 0xf) - self.regs.flags.carry) < 0
+            self.regs.flags.carry = self.regs.A < imm0 + self.regs.flags.carry
+            self.regs.flags.aux = (self.regs.A & 0xf) < (imm0 & 0xf) + self.regs.flags.carry
             self.regs.A -= imm0 + carry_saved
         elif(instr == 0xe6): # ANI
             self.regs.flags.carry = False
@@ -457,15 +457,15 @@ class CPU:
         self.regs.pc += 1
 
     def Instr_CPI(self, instr, imm0, imm1, keep_pc, cycles):
-        self.regs.flags.carry = (self.regs.A - imm0) < 0
-        self.regs.flags.aux = ((self.regs.A & 0xf) - (imm0 & 0xf)) < 0
-        res = self.regs.A - imm0
+        self.regs.flags.carry = self.regs.A < imm0
+        self.regs.flags.aux = (self.regs.A & 0xf) < (imm0 & 0xf)
+        res = (self.regs.A - imm0) & 0xff
         self.SetFlagsZSP(res)
         self.regs.pc += 1
 
     def Instr_RST(self, instr, imm0, imm1, keep_pc, cycles):
-        self.Push16(self.regs.pc)
-        self.regs.pc = 8 * ((instr >> 3) & 7)
+        self.Push16(self.regs.pc + 1)
+        self.regs.pc = instr & 0x38
 
     def Instr_RET(self, instr, imm0, imm1, keep_pc, cycles):
         self.regs.pc = self.Pop16()
@@ -485,8 +485,7 @@ class CPU:
                 elif(self.regs.C == 0x2):
                     print(chr(self.regs.E), end='')
 
-        self.regs.pc += 3
-        self.Push16(self.regs.pc)
+        self.Push16(self.regs.pc + 3)
         self.regs.pc = (imm1 << 8) | imm0
 
         keep_pc[0] = True
